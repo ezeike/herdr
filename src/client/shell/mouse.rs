@@ -1409,6 +1409,34 @@ impl ClientShellState {
             }
             return;
         }
+        if matches!(self.overlay, Some(ClientShellOverlay::CustomMenu(_))) {
+            let row_hit = self
+                .hits
+                .custom_menu_rows
+                .iter()
+                .find(|(rect, _)| super::contains(*rect, point))
+                .copied();
+            match mouse.kind {
+                MouseEventKind::Moved => {
+                    if let (Some((_, index)), Some(ClientShellOverlay::CustomMenu(menu))) =
+                        (row_hit, self.overlay.as_mut())
+                    {
+                        menu.highlighted = index;
+                        outcome.repaint = true;
+                    }
+                }
+                MouseEventKind::Down(MouseButton::Left) => {
+                    if let Some((_, index)) = row_hit {
+                        self.activate_custom_menu_item(index, outcome);
+                    } else if !super::contains(self.hits.custom_menu_area, point) {
+                        self.overlay = None;
+                        outcome.repaint = true;
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
         if matches!(self.overlay, Some(ClientShellOverlay::ContextMenu(_))) {
             let row_hit = self
                 .hits

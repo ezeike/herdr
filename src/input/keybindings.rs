@@ -1,6 +1,6 @@
 use crossterm::event::KeyCode;
 
-use crate::config::{CustomCommandKeybind, Keybinds};
+use crate::config::{CustomCommandKeybind, CustomMenuKeybind, Keybinds};
 
 use super::TerminalKey;
 
@@ -14,6 +14,7 @@ pub(crate) enum KeybindDispatch {
 pub(crate) enum KeybindMatch {
     Action(KeybindAction),
     Command(CustomCommandKeybind),
+    Menu(CustomMenuKeybind),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -177,6 +178,21 @@ pub(crate) fn resolve_custom_command(
         .cloned()
 }
 
+pub(crate) fn resolve_custom_menu(
+    keybinds: &Keybinds,
+    key: &TerminalKey,
+    dispatch: KeybindDispatch,
+) -> Option<CustomMenuKeybind> {
+    keybinds
+        .custom_menus
+        .iter()
+        .find(|binding| match dispatch {
+            KeybindDispatch::Direct => binding.bindings.matches_direct_key(key),
+            KeybindDispatch::Prefix => binding.bindings.matches_prefix_key(key),
+        })
+        .cloned()
+}
+
 pub(crate) fn resolve_indexed_action(
     keybinds: &Keybinds,
     key: &TerminalKey,
@@ -228,6 +244,7 @@ fn resolve_exact_binding(
     resolve_non_indexed_action(keybinds, key, dispatch)
         .map(KeybindMatch::Action)
         .or_else(|| resolve_custom_command(keybinds, key, dispatch).map(KeybindMatch::Command))
+        .or_else(|| resolve_custom_menu(keybinds, key, dispatch).map(KeybindMatch::Menu))
         .or_else(|| resolve_indexed_action(keybinds, key, dispatch).map(KeybindMatch::Action))
 }
 
@@ -317,6 +334,24 @@ mod tests {
         assert!(matches!(
             resolve_prefix_binding(&keybinds, &one),
             Some(KeybindMatch::Action(KeybindAction::SwitchTab(0)))
+        ));
+    }
+
+    #[test]
+    fn resolve_custom_menu_matches_configured_menu_key() {
+        let keybinds = Keybinds {
+            custom_menus: vec![CustomMenuKeybind {
+                bindings: crate::config::ActionKeybinds::direct("ctrl+g"),
+                title: "menu".to_string(),
+                items: Vec::new(),
+            }],
+            ..Keybinds::default()
+        };
+
+        let key = TerminalKey::new(KeyCode::Char('g'), KeyModifiers::CONTROL);
+        assert!(matches!(
+            resolve_exact_binding(&keybinds, &key, KeybindDispatch::Direct),
+            Some(KeybindMatch::Menu(_))
         ));
     }
 

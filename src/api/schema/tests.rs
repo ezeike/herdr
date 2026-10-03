@@ -274,6 +274,58 @@ fn request_round_trips_for_agent_explain() {
 }
 
 #[test]
+fn menu_list_request_and_response_round_trip() {
+    let request = Request {
+        id: "req_menus".into(),
+        method: Method::MenuList(EmptyParams::default()),
+    };
+    let json = serde_json::to_value(&request).unwrap();
+    assert_eq!(json["method"], "menu.list");
+    assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
+
+    let response = SuccessResponse {
+        id: "req_menus".into(),
+        result: ResponseResult::MenuList {
+            menus: vec![MenuInfo {
+                menu_id: "menu_ns_0".into(),
+                binding_label: "prefix+o".into(),
+                binding_labels: vec!["prefix+o".into()],
+                title: "Tools".into(),
+                items: vec![
+                    MenuItemInfo {
+                        command_id: "menu_ns_0_0".into(),
+                        label: "Stats".into(),
+                        hotkey: Some("s".into()),
+                        divider: false,
+                    },
+                    MenuItemInfo {
+                        command_id: String::new(),
+                        label: String::new(),
+                        hotkey: None,
+                        divider: true,
+                    },
+                ],
+            }],
+        },
+    };
+    let json = serde_json::to_value(&response).unwrap();
+    assert_eq!(json["result"]["type"], "menu_list");
+    assert_eq!(json["result"]["menus"][0]["items"][0]["label"], "Stats");
+    assert_eq!(json["result"]["menus"][0]["items"][0]["hotkey"], "s");
+    assert!(json["result"]["menus"][0]["items"][0]
+        .get("divider")
+        .is_none());
+    assert_eq!(json["result"]["menus"][0]["items"][1]["divider"], true);
+    assert!(json["result"]["menus"][0]["items"][1]
+        .get("hotkey")
+        .is_none());
+    assert_eq!(
+        serde_json::from_value::<SuccessResponse>(json).unwrap(),
+        response
+    );
+}
+
+#[test]
 fn integration_list_request_and_response_round_trip() {
     let request = Request {
         id: "req_integrations".into(),

@@ -4860,6 +4860,22 @@
         {
           "properties": {
             "method": {
+              "const": "menu.list",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/EmptyParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
               "const": "client.window_title.set",
               "type": "string"
             },
@@ -7774,6 +7790,63 @@
             }
           ]
         },
+        "MenuInfo": {
+          "properties": {
+            "binding_label": {
+              "type": "string"
+            },
+            "binding_labels": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "items": {
+              "items": {
+                "$ref": "#/schemas/success_response/$defs/MenuItemInfo"
+              },
+              "type": "array"
+            },
+            "menu_id": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "menu_id",
+            "binding_label",
+            "binding_labels",
+            "title",
+            "items"
+          ],
+          "type": "object"
+        },
+        "MenuItemInfo": {
+          "properties": {
+            "command_id": {
+              "type": "string"
+            },
+            "divider": {
+              "type": "boolean"
+            },
+            "hotkey": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "label": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "command_id",
+            "label"
+          ],
+          "type": "object"
+        },
         "NotificationShowReason": {
           "enum": [
             "shown",
@@ -10025,6 +10098,25 @@
               "required": [
                 "type",
                 "integrations"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "menus": {
+                  "items": {
+                    "$ref": "#/schemas/success_response/$defs/MenuInfo"
+                  },
+                  "type": "array"
+                },
+                "type": {
+                  "const": "menu_list",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "menus"
               ],
               "type": "object"
             },

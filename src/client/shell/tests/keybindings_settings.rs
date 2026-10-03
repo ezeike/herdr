@@ -277,13 +277,26 @@ new_tab = "prefix+c"
 [[keys.command]]
 key = "prefix+c"
 command = "local-only"
+
+[[keys.menu]]
+key = "prefix+o"
+items = [{ label = "Local", command = "local-only" }]
 "#,
     )
     .unwrap();
+    assert_eq!(
+        ClientShellConfig::from_config(&local)
+            .keybinds
+            .keybinds
+            .custom_menus
+            .len(),
+        1
+    );
     let remote_local = ClientShellConfig::from_config(&local)
         .with_keybinding_source(ClientShellKeybindingSource::RemoteLocal);
     assert_eq!(remote_local.keybinds.prefix[0].0, KeyCode::Char('a'));
     assert!(remote_local.keybinds.keybinds.custom_commands.is_empty());
+    assert!(remote_local.keybinds.keybinds.custom_menus.is_empty());
     assert_eq!(
         remote_local.keybinds.keybinds.new_tab.label().as_deref(),
         Some("prefix+c")

@@ -595,6 +595,42 @@ impl ClientShellState {
             return;
         }
 
+        if matches!(self.overlay, Some(ClientShellOverlay::CustomMenu(_))) {
+            match key.code {
+                KeyCode::Esc => {
+                    self.overlay = None;
+                    outcome.repaint = true;
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    self.move_custom_menu_selection(-1);
+                    outcome.repaint = true;
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    self.move_custom_menu_selection(1);
+                    outcome.repaint = true;
+                }
+                KeyCode::Enter => {
+                    let highlighted = match self.overlay.as_ref() {
+                        Some(ClientShellOverlay::CustomMenu(menu)) => menu.highlighted,
+                        _ => return,
+                    };
+                    self.activate_custom_menu_item(highlighted, outcome);
+                }
+                // Item hotkeys: a configured letter or digit, or an automatic digit 1-9.
+                KeyCode::Char(c)
+                    if !key
+                        .modifiers
+                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                {
+                    if let Some(index) = self.custom_menu_hotkey_index(c) {
+                        self.activate_custom_menu_item(index, outcome);
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
+
         if self.route_settings_key(key, outcome) {
             return;
         }

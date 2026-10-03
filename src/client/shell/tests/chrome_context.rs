@@ -427,6 +427,212 @@ fn global_menu_opens_from_sidebar_and_routes_client_actions() {
     assert!(state.overlay.is_none());
 }
 
+fn custom_menu_state() -> ClientShellState {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface());
+    let item = |index: usize, label: &str, hotkey: &str| crate::api::schema::MenuItemInfo {
+        command_id: format!("menu_ns_0_{index}"),
+        label: label.into(),
+        hotkey: Some(hotkey.into()),
+        divider: false,
+    };
+    state.overlay = Some(ClientShellOverlay::CustomMenu(ClientCustomMenuOverlay {
+        menu: crate::api::schema::MenuInfo {
+            menu_id: "menu_ns_0".into(),
+            binding_label: "prefix+o".into(),
+            binding_labels: vec!["prefix+o".into()],
+            title: "Tools".into(),
+            items: vec![
+                item(0, "Stats", "s"),
+                item(1, "Git log", "g"),
+                crate::api::schema::MenuItemInfo {
+                    command_id: String::new(),
+                    label: String::new(),
+                    hotkey: None,
+                    divider: true,
+                },
+                item(3, "Logs", "1"),
+            ],
+        },
+        highlighted: 0,
+    }));
+    state
+}
+
+fn invoked_command_id(outcome: &ClientShellInput) -> &str {
+    let [ClientShellAction::Endpoint { request, .. }] = &outcome.actions[..] else {
+        panic!("expected a command.invoke request");
+    };
+    let crate::api::schema::Method::CommandInvoke(params) = &request.method else {
+        panic!("expected a command.invoke request");
+    };
+    &params.command_id
+}
+
+#[test]
+fn custom_menu_renders_title_border_hotkeys_and_dividers() {
+    let mut state = custom_menu_state();
+
+    let frame = state.compose(106, 20).expect("custom menu frame");
+    let lines = frame
+        .cells
+        .chunks(frame.width as usize)
+        .map(|row| {
+            row.iter()
+                .map(|cell| cell.symbol.as_str())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>();
+    let text = lines.join("\n");
+
+    assert!(text.contains("(s) Stats"));
+    assert!(text.contains("(g) Git log"));
+    assert!(text.contains("(1) Logs"));
+    let title_line = lines
+        .iter()
+        .find(|line| line.contains("Tools"))
+        .expect("title line");
+    assert!(title_line.contains('┌') && title_line.contains('┐'));
+    let divider_line = lines
+        .iter()
+        .find(|line| line.contains('├'))
+        .expect("divider line");
+    assert!(divider_line.contains('┤'));
+    assert!(!divider_line.contains("Git log"));
+    assert_eq!(state.hits.custom_menu_rows.len(), 3);
+}
+
+#[test]
+fn custom_menu_keyboard_navigation_skips_dividers_and_activates() {
+    let mut state = custom_menu_state();
+    state.compose(106, 20).expect("custom menu frame");
+
+    for (input, highlighted) in [
+        (b"\x1b[B".as_slice(), 1),
+        (b"j".as_slice(), 3),
+        (b"j".as_slice(), 3),
+        (b"k".as_slice(), 1),
+        (b"\x1b[A".as_slice(), 0),
+        (b"\x1b[A".as_slice(), 0),
+    ] {
+        let moved = state.handle_input_bytes(input);
+        assert!(moved.repaint);
+        assert!(matches!(
+            state.overlay,
+            Some(ClientShellOverlay::CustomMenu(ClientCustomMenuOverlay {
+                highlighted: current,
+                ..
+            })) if current == highlighted
+        ));
+    }
+    let text = state.handle_raw_events(vec![RawInputEvent::Text(crate::input::TextCommit::new(
+        "not pane input",
+    ))]);
+    assert!(text.requests.is_empty());
+    let paste = state.handle_raw_events(vec![RawInputEvent::Paste("not pane input".into())]);
+    assert!(paste.requests.is_empty());
+
+    state.handle_input_bytes(b"j");
+    let activated = state.handle_input_bytes(b"\r");
+    assert_eq!(invoked_command_id(&activated), "menu_ns_0_1");
+    assert!(state.overlay.is_none());
+}
+
+#[test]
+fn custom_menu_escape_closes_without_invoking() {
+    let mut state = custom_menu_state();
+
+    let outcome = state.handle_input_bytes(b"\x1b");
+
+    assert!(outcome.repaint);
+    assert!(outcome.actions.is_empty());
+    assert!(state.overlay.is_none());
+}
+
+#[test]
+fn custom_menu_hotkeys_activate_items_case_insensitively() {
+    for (input, command_id) in [
+        (b"s".as_slice(), "menu_ns_0_0"),
+        (b"G".as_slice(), "menu_ns_0_1"),
+        (b"1".as_slice(), "menu_ns_0_3"),
+    ] {
+        let mut state = custom_menu_state();
+        let activated = state.handle_input_bytes(input);
+        assert_eq!(invoked_command_id(&activated), command_id);
+        assert!(state.overlay.is_none());
+    }
+
+    let mut state = custom_menu_state();
+    for input in [b"x".as_slice(), b"2".as_slice(), b"0".as_slice(), b"\x13"] {
+        let outcome = state.handle_input_bytes(input);
+        assert!(outcome.actions.is_empty());
+    }
+    assert!(matches!(
+        state.overlay,
+        Some(ClientShellOverlay::CustomMenu(_))
+    ));
+}
+
+#[test]
+fn custom_menu_mouse_hover_click_and_outside_click_are_client_owned() {
+    let mut state = custom_menu_state();
+    state.compose(106, 20).expect("custom menu frame");
+    let hovered = state.hits.custom_menu_rows[1].0;
+    let moved = state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+        kind: MouseEventKind::Moved,
+        column: hovered.x + 1,
+        row: hovered.y,
+        modifiers: KeyModifiers::empty(),
+    })]);
+    assert!(moved.repaint);
+    assert!(matches!(
+        state.overlay,
+        Some(ClientShellOverlay::CustomMenu(ClientCustomMenuOverlay {
+            highlighted: 1,
+            ..
+        }))
+    ));
+
+    let divider_y = state.hits.custom_menu_rows[1].0.y + 1;
+    let on_divider =
+        state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: hovered.x + 1,
+            row: divider_y,
+            modifiers: KeyModifiers::empty(),
+        })]);
+    assert!(on_divider.actions.is_empty());
+    assert!(matches!(
+        state.overlay,
+        Some(ClientShellOverlay::CustomMenu(_))
+    ));
+
+    let clicked = state.hits.custom_menu_rows[2].0;
+    let activated =
+        state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: clicked.x + 1,
+            row: clicked.y,
+            modifiers: KeyModifiers::empty(),
+        })]);
+    assert_eq!(invoked_command_id(&activated), "menu_ns_0_3");
+    assert!(state.overlay.is_none());
+
+    let mut state = custom_menu_state();
+    state.compose(106, 20).expect("custom menu frame");
+    let outside =
+        state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 105,
+            row: 19,
+            modifiers: KeyModifiers::empty(),
+        })]);
+    assert!(outside.repaint);
+    assert!(outside.actions.is_empty());
+    assert!(state.overlay.is_none());
+}
+
 #[test]
 fn new_tab_overlay_owns_text_cursor_and_submits_public_api_request() {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));

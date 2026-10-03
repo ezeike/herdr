@@ -175,6 +175,7 @@ impl ClientShellConfig {
     pub(crate) fn with_keybinding_source(mut self, source: ClientShellKeybindingSource) -> Self {
         self.keybinding_source = source;
         self.keybinds.keybinds.custom_commands.clear();
+        self.keybinds.keybinds.custom_menus.clear();
         self
     }
 
@@ -298,6 +299,7 @@ impl ClientShellConfig {
                     self.local_keys = config.keys.clone();
                     if self.keybinding_source == ClientShellKeybindingSource::RemoteLocal {
                         keybinds.keybinds.custom_commands.clear();
+                        keybinds.keybinds.custom_menus.clear();
                     }
                     self.keybinds = keybinds;
                     diagnostics.extend(keybind_diagnostics);

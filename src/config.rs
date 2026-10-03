@@ -19,7 +19,8 @@ pub use self::{
     keybinds::{
         format_prefix_combos, normalize_key_combo, terminal_key_matches_combo, ActionKeybinds,
         BindingConfig, CommandKeybindConfig, CustomCommandAction, CustomCommandKeybind,
-        IndexedKeybind, KeyCombo, Keybinds, LiveKeybindConfig,
+        CustomMenuEntry, CustomMenuKeybind, IndexedKeybind, KeyCombo, Keybinds, LiveKeybindConfig,
+        MenuConfig,
     },
     model::{
         validated_sidebar_bounds, AgentPanelSortConfig, Config, ConfigReloadReport,

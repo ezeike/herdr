@@ -893,6 +893,67 @@ async fn client_shell_endpoint_request_uses_the_selected_connection() {
     shutdown_test_runtimes(&mut server);
 }
 
+#[tokio::test]
+async fn client_shell_endpoint_request_serves_menu_list() {
+    let mut server = test_headless_server();
+    server.app.state.workspaces = vec![crate::workspace::Workspace::test_new("endpoint")];
+    server.app.state.ensure_test_terminals();
+    server.app.state.active = Some(0);
+    let (writer, control_rx, _render_rx) = test_client_writer();
+    let client_id = 42;
+    assert!(
+        server.handle_server_event(ServerEvent::ClientShellConnected {
+            surface_reuse: false,
+            surface_delta: false,
+            surface_scroll: false,
+            client_id,
+            surface_cols: 80,
+            surface_rows: 23,
+            cell_width_px: 0,
+            cell_height_px: 0,
+            pixel_mouse: false,
+            direct_graphics: false,
+            endpoint_keybindings: false,
+            mouse_capture: false,
+            surface_active: true,
+            writer,
+        })
+    );
+    let _initial_snapshot = client_shell_snapshot(&control_rx);
+    let boot_id = server.client_shell_boot_id.clone();
+
+    assert!(
+        !server.handle_server_event(ServerEvent::ClientShellEndpointRequest {
+            client_id,
+            boot_id,
+            request: Box::new(api::schema::Request {
+                id: "client-shell:menus".into(),
+                method: api::schema::Method::MenuList(api::schema::EmptyParams::default()),
+            }),
+        })
+    );
+    let response_ready = server
+        .server_event_rx
+        .recv()
+        .await
+        .expect("endpoint response ready");
+    assert!(!server.handle_server_event(response_ready));
+
+    let ServerMessage::ClientShellEndpointResponseChunk { data, .. } =
+        read_server_message(control_rx.recv().expect("endpoint response"))
+    else {
+        panic!("expected client shell endpoint response");
+    };
+    let response =
+        serde_json::from_slice::<api::schema::SuccessResponse>(&data).expect("success response");
+    assert_eq!(response.id, "client-shell:menus");
+    assert!(matches!(
+        response.result,
+        api::schema::ResponseResult::MenuList { .. }
+    ));
+    shutdown_test_runtimes(&mut server);
+}
+
 #[test]
 fn terminal_client_endpoint_request_error_removes_client() {
     let mut server = test_headless_server();

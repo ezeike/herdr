@@ -246,6 +246,48 @@ Custom commands receive `HERDR_SOCKET_PATH`, `HERDR_BIN_PATH`, `HERDR_ACTIVE_WOR
 
 On Windows, custom command strings use `cmd.exe /d /c`, so environment variables use `%HERDR_BIN_PATH%` syntax. To run PowerShell syntax, invoke it explicitly, for example `powershell.exe -NoProfile -Command "..."`.
 
+## User-defined menus
+
+Create a keybinding that opens a popup menu with multiple items, each running a different command when selected. Menus are useful for grouping related commands.
+
+```toml
+[[keys.menu]]
+key = "prefix+o"
+title = "Tools"
+items = [
+  { label = "Stats", command = "btop", type = "popup", width = "80%", height = "80%", hotkey = "s" },
+  { label = "Git log", command = "lazygit", hotkey = "g" },
+  { divider = true },
+  { label = "Shell", command = "fish" },
+]
+```
+
+When the configured key is pressed, a centered popup menu appears with the title in its top border and each item's label on its own row. Navigate with arrow keys or `j`/`k`, press Enter to activate the highlighted item, or press an item's hotkey to activate it directly. Each hotkey is shown in parentheses before the label. Dividers separate items into groups and are skipped when navigating. Press Esc or click outside to close the menu without selecting anything.
+
+Items without a `hotkey` are numbered `1` through `9` in order, skipping any digit an item already uses as its hotkey. Items past the ninth have no hotkey and are reached with the arrow keys.
+
+Menu-level fields:
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `key` | string | yes | The keybinding that opens the menu, such as `"prefix+o"`. |
+| `title` | string | no | Title shown in the menu popup's top border. Defaults to `"menu"`. |
+
+Menu item fields:
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `label` | string | no | Display text for the menu item. Defaults to the command. |
+| `command` | string | yes | The command or script to run. |
+| `hotkey` | string | no | A single letter or digit that activates the item while the menu is open. Letters are case-insensitive, and `j` and `k` are reserved for navigation. Duplicate or invalid hotkeys are ignored with a config diagnostic. |
+| `divider` | boolean | no | When `true`, the entry is a separator line and all other fields are ignored. |
+| `type` | string | no | One of `"shell"`, `"pane"`, `"popup"`, `"plugin_action"`. Defaults to `"shell"`. |
+| `description` | string | no | Additional context. |
+| `width` | string or number | no | Popup width for `type = "popup"`: a number of terminal cells or a string like `"80%"`. |
+| `height` | string or number | no | Popup height for `type = "popup"`: a number of terminal cells or a string like `"80%"`. |
+
+Menu items support the same `type` values and environment variables as `[[keys.command]]` keybindings. Each item's command receives `HERDR_SOCKET_PATH`, `HERDR_BIN_PATH`, `HERDR_ACTIVE_WORKSPACE_ID`, `HERDR_ACTIVE_TAB_ID`, `HERDR_ACTIVE_PANE_ID`, and `HERDR_ACTIVE_PANE_CWD` when available.
+
 ## Theme
 
 Choose a built-in theme:

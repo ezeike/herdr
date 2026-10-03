@@ -205,6 +205,9 @@ pub enum ResponseResult {
     IntegrationList {
         integrations: Vec<super::integrations::IntegrationInfo>,
     },
+    MenuList {
+        menus: Vec<super::menus::MenuInfo>,
+    },
     IntegrationInstall {
         target: IntegrationTarget,
         details: IntegrationInstallResult,

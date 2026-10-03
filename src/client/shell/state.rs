@@ -115,6 +115,8 @@ pub(super) struct ShellHitMap {
     pub(super) notification_toast: Rect,
     pub(super) global_menu_rows: Vec<(Rect, usize)>,
     pub(super) context_menu_rows: Vec<(Rect, usize)>,
+    pub(super) custom_menu_area: Rect,
+    pub(super) custom_menu_rows: Vec<(Rect, usize)>,
     pub(super) overlay_primary: Rect,
     pub(super) overlay_clear: Rect,
     pub(super) overlay_cancel: Rect,
@@ -290,6 +292,7 @@ pub(super) enum ClientShellOverlayKind {
     WorktreeRemove,
     ContextMenu,
     GlobalMenu,
+    CustomMenu,
     Settings,
 }
 
@@ -378,6 +381,12 @@ pub(super) struct ClientHelpOverlay {
 
 #[derive(Debug)]
 pub(super) struct ClientGlobalMenuOverlay {
+    pub(super) highlighted: usize,
+}
+
+#[derive(Debug)]
+pub(super) struct ClientCustomMenuOverlay {
+    pub(super) menu: crate::api::schema::MenuInfo,
     pub(super) highlighted: usize,
 }
 
@@ -592,6 +601,7 @@ pub(super) enum ClientShellOverlay {
     WorktreeRemove(ClientWorktreeRemoveOverlay),
     ContextMenu(ClientContextMenuOverlay),
     GlobalMenu(ClientGlobalMenuOverlay),
+    CustomMenu(ClientCustomMenuOverlay),
     Settings(ClientSettingsOverlay),
 }
 
@@ -610,6 +620,7 @@ impl ClientShellOverlay {
             Self::WorktreeRemove(_) => ClientShellOverlayKind::WorktreeRemove,
             Self::ContextMenu(_) => ClientShellOverlayKind::ContextMenu,
             Self::GlobalMenu(_) => ClientShellOverlayKind::GlobalMenu,
+            Self::CustomMenu(_) => ClientShellOverlayKind::CustomMenu,
             Self::Settings(_) => ClientShellOverlayKind::Settings,
         }
     }
@@ -627,6 +638,9 @@ pub(super) enum PendingEndpointKind {
     ReloadConfig,
     IntegrationList,
     IntegrationInstall,
+    MenuOpen {
+        binding_labels: Vec<String>,
+    },
     PrepareWorktreeCreate {
         workspace_id: String,
     },

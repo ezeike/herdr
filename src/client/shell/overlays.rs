@@ -47,6 +47,7 @@ pub(crate) fn render_client_overlay(
         ClientShellOverlay::Navigator(_)
             | ClientShellOverlay::ContextMenu(_)
             | ClientShellOverlay::GlobalMenu(_)
+            | ClientShellOverlay::CustomMenu(_)
     ) {
         for y in b.area.y..b.area.bottom() {
             for x in b.area.x..b.area.right() {
@@ -79,7 +80,9 @@ pub(crate) fn render_client_overlay(
         ClientShellOverlay::WorktreeRemove(v) => {
             worktree_overlays::render_worktree_remove_overlay(b, v, p)
         }
-        ClientShellOverlay::ContextMenu(_) | ClientShellOverlay::GlobalMenu(_) => None,
+        ClientShellOverlay::ContextMenu(_)
+        | ClientShellOverlay::GlobalMenu(_)
+        | ClientShellOverlay::CustomMenu(_) => None,
     }
 }
 
@@ -155,6 +158,114 @@ pub(crate) fn render_global_menu(
         }
         rows.push((row, index));
     }
+    Some(OverlayRender {
+        area: rect,
+        menu_rows: rows,
+        ..OverlayRender::default()
+    })
+}
+
+pub(crate) fn render_custom_menu(
+    buffer: &mut Buffer,
+    menu: &ClientCustomMenuOverlay,
+    palette: &Palette,
+) -> Option<OverlayRender> {
+    let screen = buffer.area;
+    let title = &menu.menu.title;
+    // Rows are a space, a 4-column "(x) " hotkey gutter, the label, and a space.
+    let width = menu
+        .menu
+        .items
+        .iter()
+        .map(|item| display_width(&item.label))
+        .max()
+        .unwrap_or(0)
+        .saturating_add(8)
+        .max(display_width(title).saturating_add(6))
+        .min(screen.width.max(1));
+    let height = (menu.menu.items.len() as u16)
+        .saturating_add(2) // top/bottom border
+        .min(screen.height.max(1));
+    let x = screen.x + screen.width.saturating_sub(width) / 2;
+    let y = screen.y + screen.height.saturating_sub(height) / 2;
+    let rect = Rect::new(x, y, width, height);
+    let inner = panel(buffer, rect, palette.accent, palette.panel_bg)?;
+
+    let border_style = Style::default().fg(palette.accent).bg(palette.panel_bg);
+    let title_style = Style::default()
+        .fg(palette.text)
+        .bg(palette.panel_bg)
+        .add_modifier(Modifier::BOLD);
+    put_text(
+        buffer,
+        rect.x.saturating_add(2),
+        rect.y,
+        rect.width.saturating_sub(4),
+        &format!(" {title} "),
+        title_style,
+    );
+
+    let mut rows = Vec::new();
+    for (index, item) in menu.menu.items.iter().enumerate() {
+        let row_y = inner.y.saturating_add(index as u16);
+        if row_y >= inner.bottom() {
+            break;
+        }
+        if item.divider {
+            for x in rect.x..rect.right() {
+                let symbol = if x == rect.x {
+                    "├"
+                } else if x + 1 == rect.right() {
+                    "┤"
+                } else {
+                    "─"
+                };
+                buffer[(x, row_y)]
+                    .set_symbol(symbol)
+                    .set_style(border_style);
+            }
+            continue;
+        }
+        let row = Rect::new(inner.x, row_y, inner.width, 1);
+        let highlighted = index == menu.highlighted;
+        let style = if highlighted {
+            Style::default()
+                .fg(panel_contrast_fg(palette))
+                .bg(palette.accent)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(palette.text).bg(palette.panel_bg)
+        };
+        buffer.set_style(row, style);
+        if let Some(hotkey) = item.hotkey.as_deref() {
+            let bracket_style = if highlighted {
+                style
+            } else {
+                Style::default().fg(palette.overlay0).bg(palette.panel_bg)
+            };
+            let hotkey_style = if highlighted {
+                style
+            } else {
+                Style::default()
+                    .fg(palette.accent)
+                    .bg(palette.panel_bg)
+                    .add_modifier(Modifier::BOLD)
+            };
+            put_text(buffer, row.x + 1, row.y, 1, "(", bracket_style);
+            put_text(buffer, row.x + 2, row.y, 1, hotkey, hotkey_style);
+            put_text(buffer, row.x + 3, row.y, 1, ")", bracket_style);
+        }
+        put_text(
+            buffer,
+            row.x + 5,
+            row.y,
+            row.width.saturating_sub(5),
+            &item.label,
+            style,
+        );
+        rows.push((row, index));
+    }
+
     Some(OverlayRender {
         area: rect,
         menu_rows: rows,

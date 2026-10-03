@@ -255,6 +255,16 @@ impl ClientShellState {
                     );
                 }
             }
+            crate::input::KeybindMatch::Menu(menu) => {
+                // The endpoint owns the menu definitions; open the popup on its reply.
+                self.push_endpoint_method_with_kind(
+                    crate::api::schema::Method::MenuList(crate::api::schema::EmptyParams::default()),
+                    PendingEndpointKind::MenuOpen {
+                        binding_labels: menu.bindings.labels(),
+                    },
+                    outcome,
+                );
+            }
         }
     }
 
@@ -819,6 +829,10 @@ impl ClientShellState {
             kind @ (PendingEndpointKind::IntegrationList
             | PendingEndpointKind::IntegrationInstall) => {
                 return self.handle_settings_endpoint_result(kind, result);
+            }
+            PendingEndpointKind::MenuOpen { binding_labels } => {
+                let repaint = self.handle_custom_menu_endpoint_result(&binding_labels, result);
+                return (repaint, Vec::new());
             }
             kind => {
                 let mut outcome = ClientShellInput::default();

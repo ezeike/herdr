@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 #[cfg(test)]
 use crossterm::event::KeyEvent;
 use crossterm::event::{KeyCode, KeyModifiers};
@@ -145,6 +147,66 @@ impl Default for CommandKeybindConfig {
             description: None,
             width: None,
             height: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct MenuItemConfig {
+    /// Label shown in the popup list.
+    pub label: String,
+    /// Command executed either in the background shell, inside a pane, in a
+    /// popup, or as a plugin action — same semantics as `keys.command`.
+    pub command: String,
+    /// Command execution mode. Default: "shell".
+    #[serde(rename = "type")]
+    pub action_type: CommandKeybindType,
+    /// Optional user-defined description for this menu item.
+    pub description: Option<String>,
+    /// Optional popup width as cells or a percentage string when type = "popup".
+    pub width: Option<PopupSize>,
+    /// Optional popup height as cells or a percentage string when type = "popup".
+    pub height: Option<PopupSize>,
+    /// Optional single letter or digit that activates this item while the menu is open.
+    pub hotkey: Option<String>,
+    /// Renders a separator line instead of an item.
+    pub divider: bool,
+}
+
+impl Default for MenuItemConfig {
+    fn default() -> Self {
+        Self {
+            label: String::new(),
+            command: String::new(),
+            action_type: CommandKeybindType::Shell,
+            description: None,
+            width: None,
+            height: None,
+            hotkey: None,
+            divider: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct MenuConfig {
+    /// Key that opens the menu. Use `prefix+g` for prefix mode or a modified
+    /// chord for direct mode.
+    pub key: BindingConfig,
+    /// Optional title shown in the popup's top border.
+    pub title: Option<String>,
+    /// Ordered list of selectable items and dividers.
+    pub items: Vec<MenuItemConfig>,
+}
+
+impl Default for MenuConfig {
+    fn default() -> Self {
+        Self {
+            key: BindingConfig::empty(),
+            title: None,
+            items: Vec::new(),
         }
     }
 }
@@ -336,6 +398,22 @@ pub struct CustomCommandKeybind {
     pub height: Option<PopupSize>,
 }
 
+#[derive(Debug, Clone)]
+pub enum CustomMenuEntry {
+    Item {
+        binding: CustomCommandKeybind,
+        hotkey: Option<char>,
+    },
+    Divider,
+}
+
+#[derive(Debug, Clone)]
+pub struct CustomMenuKeybind {
+    pub bindings: ActionKeybinds,
+    pub title: String,
+    pub items: Vec<CustomMenuEntry>,
+}
+
 /// Parsed keybinds for Herdr actions.
 #[derive(Debug, Clone)]
 pub struct NavigateKeybinds {
@@ -404,6 +482,7 @@ pub struct Keybinds {
     pub resize_pane_right: ActionKeybinds,
     pub toggle_sidebar: ActionKeybinds,
     pub custom_commands: Vec<CustomCommandKeybind>,
+    pub custom_menus: Vec<CustomMenuKeybind>,
 }
 
 impl Default for Keybinds {
@@ -587,6 +666,7 @@ impl Config {
             resize_pane_right: empty_action!(),
             toggle_sidebar: empty_action!(),
             custom_commands: Vec::new(),
+            custom_menus: Vec::new(),
         };
 
         macro_rules! field_source {
@@ -769,6 +849,7 @@ impl Config {
                     &mut registry,
                     &mut diagnostics,
                 );
+                append_custom_menu_bindings(self, &mut keybinds, &mut registry, &mut diagnostics);
             }
         }
 
@@ -855,6 +936,158 @@ fn append_custom_command_bindings(
             height,
         });
     }
+}
+
+fn append_custom_menu_bindings(
+    config: &Config,
+    keybinds: &mut Keybinds,
+    registry: &mut BindingRegistry,
+    diagnostics: &mut Vec<String>,
+) {
+    for (index, menu) in config.keys.menu.iter().enumerate() {
+        let key_field = format!("keys.menu[{index}].key");
+
+        if menu.items.is_empty() {
+            let diag = format!("empty menu: {key_field}; disabling menu (no items)");
+            warn!(message = %diag, "config diagnostic");
+            diagnostics.push(diag);
+            continue;
+        }
+
+        let bindings = parse_action_bindings(
+            &key_field,
+            &menu.key,
+            registry,
+            diagnostics,
+            BindingSource::User,
+        );
+        if bindings.bindings.is_empty() {
+            continue;
+        }
+
+        let mut items = Vec::new();
+        let mut used_hotkeys = HashSet::new();
+        for (item_index, item) in menu.items.iter().enumerate() {
+            if item.divider {
+                items.push(CustomMenuEntry::Divider);
+                continue;
+            }
+
+            let command_field = format!("keys.menu[{index}].items[{item_index}].command");
+            if item.command.trim().is_empty() {
+                let diag = format!("empty menu item command: {command_field}; skipping item");
+                warn!(message = %diag, "config diagnostic");
+                diagnostics.push(diag);
+                continue;
+            }
+
+            let action = match item.action_type {
+                CommandKeybindType::Shell => CustomCommandAction::Shell,
+                CommandKeybindType::Pane => CustomCommandAction::Pane,
+                CommandKeybindType::Popup => CustomCommandAction::Popup,
+                CommandKeybindType::PluginAction => CustomCommandAction::PluginAction,
+            };
+            let (width, height) = if action == CustomCommandAction::Popup {
+                (item.width, item.height)
+            } else {
+                if item.width.is_some() || item.height.is_some() {
+                    let diag = format!(
+                        "popup size on non-popup menu item: keys.menu[{index}].items[{item_index}]; ignoring width and height"
+                    );
+                    warn!(message = %diag, "config diagnostic");
+                    diagnostics.push(diag);
+                }
+                (None, None)
+            };
+            let label = if item.label.trim().is_empty() {
+                item.command.clone()
+            } else {
+                item.label.clone()
+            };
+            let hotkey = item.hotkey.as_deref().and_then(|raw| {
+                let hotkey_field = format!("keys.menu[{index}].items[{item_index}].hotkey");
+                parse_menu_hotkey(&hotkey_field, raw, &mut used_hotkeys, diagnostics)
+            });
+            items.push(CustomMenuEntry::Item {
+                binding: CustomCommandKeybind {
+                    bindings: ActionKeybinds::default(),
+                    label,
+                    command: item.command.clone(),
+                    action,
+                    description: item.description.clone(),
+                    width,
+                    height,
+                },
+                hotkey,
+            });
+        }
+
+        if !items
+            .iter()
+            .any(|entry| matches!(entry, CustomMenuEntry::Item { .. }))
+        {
+            let diag =
+                format!("menu has no valid items after validation: {key_field}; disabling menu");
+            warn!(message = %diag, "config diagnostic");
+            diagnostics.push(diag);
+            continue;
+        }
+
+        // Items without an explicit hotkey take the unused digits 1-9 in order.
+        let mut free_digits = ('1'..='9').filter(|digit| !used_hotkeys.contains(digit));
+        for entry in &mut items {
+            if let CustomMenuEntry::Item { hotkey, .. } = entry {
+                if hotkey.is_none() {
+                    *hotkey = free_digits.next();
+                }
+            }
+        }
+
+        let title = menu
+            .title
+            .clone()
+            .filter(|title| !title.trim().is_empty())
+            .unwrap_or_else(|| "menu".to_string());
+        keybinds.custom_menus.push(CustomMenuKeybind {
+            bindings,
+            title,
+            items,
+        });
+    }
+}
+
+fn parse_menu_hotkey(
+    field: &str,
+    raw: &str,
+    used: &mut HashSet<char>,
+    diagnostics: &mut Vec<String>,
+) -> Option<char> {
+    let mut chars = raw.trim().chars();
+    let key = match (chars.next(), chars.next()) {
+        (Some(key), None) if key.is_ascii_alphanumeric() => key.to_ascii_lowercase(),
+        _ => {
+            let diag = format!(
+                "invalid menu hotkey: {field}; expected a single letter or digit, ignoring hotkey"
+            );
+            warn!(message = %diag, "config diagnostic");
+            diagnostics.push(diag);
+            return None;
+        }
+    };
+    if matches!(key, 'j' | 'k') {
+        let diag =
+            format!("reserved menu hotkey: {field}; j and k navigate the menu, ignoring hotkey");
+        warn!(message = %diag, "config diagnostic");
+        diagnostics.push(diag);
+        return None;
+    }
+    if !used.insert(key) {
+        let diag = format!("duplicate menu hotkey: {field}; ignoring hotkey");
+        warn!(message = %diag, "config diagnostic");
+        diagnostics.push(diag);
+        return None;
+    }
+    Some(key)
 }
 
 fn parse_action_bindings(
@@ -2460,5 +2693,327 @@ width = "80%"
             .collect_diagnostics()
             .iter()
             .any(|diag| diag.contains("popup size on non-popup custom command")));
+    }
+
+    fn menu_item(entry: &CustomMenuEntry) -> (&CustomCommandKeybind, Option<char>) {
+        match entry {
+            CustomMenuEntry::Item { binding, hotkey } => (binding, *hotkey),
+            CustomMenuEntry::Divider => panic!("expected a menu item, found a divider"),
+        }
+    }
+
+    #[test]
+    fn custom_menu_parses_and_registers_items() {
+        let config: Config = toml::from_str(
+            r#"
+[[keys.menu]]
+key = "prefix+o"
+title = "claude tools"
+
+[[keys.menu.items]]
+label = "Stats"
+command = "cctool-stats.sh"
+type = "popup"
+width = "90%"
+height = "80%"
+
+[[keys.menu.items]]
+command = "claude-transcript-restart.sh"
+"#,
+        )
+        .unwrap();
+
+        let keybinds = config.keybinds();
+        assert_eq!(keybinds.custom_menus.len(), 1);
+        let menu = &keybinds.custom_menus[0];
+        assert_eq!(menu.title, "claude tools");
+        assert_eq!(menu.items.len(), 2);
+        let (stats, _) = menu_item(&menu.items[0]);
+        assert_eq!(stats.label, "Stats");
+        assert_eq!(stats.action, CustomCommandAction::Popup);
+        assert_eq!(stats.width, Some(PopupSize::Percent(90)));
+        assert_eq!(stats.height, Some(PopupSize::Percent(80)));
+        let (restart, _) = menu_item(&menu.items[1]);
+        assert_eq!(restart.label, "claude-transcript-restart.sh");
+        assert_eq!(restart.action, CustomCommandAction::Shell);
+        assert!(config.collect_diagnostics().is_empty());
+    }
+
+    #[test]
+    fn custom_menu_without_title_uses_default_title() {
+        let config: Config = toml::from_str(
+            r#"
+[[keys.menu]]
+key = "prefix+o"
+items = [{ label = "Stats", command = "btop" }]
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.keybinds().custom_menus[0].title, "menu");
+    }
+
+    #[test]
+    fn custom_menu_without_items_is_disabled_with_diagnostic() {
+        let config: Config = toml::from_str(
+            r#"
+[[keys.menu]]
+key = "prefix+o"
+"#,
+        )
+        .unwrap();
+
+        assert!(config.keybinds().custom_menus.is_empty());
+        assert!(config
+            .collect_diagnostics()
+            .iter()
+            .any(|diag| diag.contains("empty menu") && diag.contains("keys.menu[0].key")));
+    }
+
+    #[test]
+    fn custom_menu_skips_items_with_empty_commands_with_diagnostic() {
+        let config: Config = toml::from_str(
+            r#"
+[[keys.menu]]
+key = "prefix+o"
+items = [
+  { label = "Stats", command = "btop" },
+  { label = "Broken", command = "  " },
+]
+"#,
+        )
+        .unwrap();
+
+        let keybinds = config.keybinds();
+        assert_eq!(keybinds.custom_menus[0].items.len(), 1);
+        assert_eq!(
+            menu_item(&keybinds.custom_menus[0].items[0]).0.label,
+            "Stats"
+        );
+        assert!(config.collect_diagnostics().iter().any(|diag| {
+            diag.contains("empty menu item command") && diag.contains("keys.menu[0].items[1]")
+        }));
+    }
+
+    #[test]
+    fn custom_menu_with_only_invalid_items_is_disabled_with_diagnostic() {
+        let config: Config = toml::from_str(
+            r#"
+[[keys.menu]]
+key = "prefix+o"
+items = [{ label = "Broken", command = "" }]
+"#,
+        )
+        .unwrap();
+
+        assert!(config.keybinds().custom_menus.is_empty());
+        assert!(config
+            .collect_diagnostics()
+            .iter()
+            .any(|diag| diag.contains("no valid items") && diag.contains("keys.menu[0].key")));
+    }
+
+    #[test]
+    fn non_popup_menu_item_ignores_popup_size_with_diagnostic() {
+        let config: Config = toml::from_str(
+            r#"
+[[keys.menu]]
+key = "prefix+o"
+items = [{ label = "Git", command = "lazygit", type = "pane", width = "80%" }]
+"#,
+        )
+        .unwrap();
+
+        let keybinds = config.keybinds();
+        assert_eq!(menu_item(&keybinds.custom_menus[0].items[0]).0.width, None);
+        assert!(config
+            .collect_diagnostics()
+            .iter()
+            .any(|diag| diag.contains("popup size on non-popup menu item")));
+    }
+
+    #[test]
+    fn custom_menu_prefix_rhs_equal_to_configured_prefix_is_rejected() {
+        let config: Config = toml::from_str(
+            r#"
+[keys]
+prefix = "ctrl+b"
+
+[[keys.menu]]
+key = "prefix+ctrl+b"
+items = [{ label = "Stats", command = "btop" }]
+"#,
+        )
+        .unwrap();
+
+        assert!(config.keybinds().custom_menus.is_empty());
+        assert!(config.collect_diagnostics().iter().any(|diag| {
+            diag.contains("reserved keybinding") && diag.contains("keys.menu[0].key")
+        }));
+    }
+
+    #[test]
+    fn custom_menu_binding_conflicting_with_user_binding_is_disabled() {
+        let config: Config = toml::from_str(
+            r#"
+[keys]
+next_tab = "prefix+n"
+
+[[keys.menu]]
+key = "prefix+n"
+items = [{ label = "Stats", command = "btop" }]
+"#,
+        )
+        .unwrap();
+
+        assert!(config.keybinds().custom_menus.is_empty());
+        assert!(config
+            .collect_diagnostics()
+            .iter()
+            .any(|diag| diag.contains("keys.menu[0].key")));
+    }
+
+    #[test]
+    fn custom_menu_dividers_are_kept_and_do_not_use_up_digits() {
+        let config: Config = toml::from_str(
+            r#"
+[[keys.menu]]
+key = "prefix+o"
+items = [
+  { label = "Stats", command = "btop" },
+  { divider = true },
+  { label = "Git", command = "lazygit" },
+]
+"#,
+        )
+        .unwrap();
+
+        let keybinds = config.keybinds();
+        let items = &keybinds.custom_menus[0].items;
+        assert_eq!(items.len(), 3);
+        assert_eq!(menu_item(&items[0]).1, Some('1'));
+        assert!(matches!(items[1], CustomMenuEntry::Divider));
+        assert_eq!(menu_item(&items[2]).1, Some('2'));
+        assert!(config.collect_diagnostics().is_empty());
+    }
+
+    #[test]
+    fn custom_menu_with_only_dividers_is_disabled_with_diagnostic() {
+        let config: Config = toml::from_str(
+            r#"
+[[keys.menu]]
+key = "prefix+o"
+items = [{ divider = true }]
+"#,
+        )
+        .unwrap();
+
+        assert!(config.keybinds().custom_menus.is_empty());
+        assert!(config
+            .collect_diagnostics()
+            .iter()
+            .any(|diag| diag.contains("no valid items") && diag.contains("keys.menu[0].key")));
+    }
+
+    #[test]
+    fn custom_menu_explicit_hotkeys_win_and_automatic_digits_skip_them() {
+        let config: Config = toml::from_str(
+            r#"
+[[keys.menu]]
+key = "prefix+o"
+items = [
+  { label = "Stats", command = "btop", hotkey = "S" },
+  { label = "Git", command = "lazygit" },
+  { label = "Logs", command = "tail", hotkey = "1" },
+  { label = "Top", command = "top" },
+]
+"#,
+        )
+        .unwrap();
+
+        let keybinds = config.keybinds();
+        let hotkeys: Vec<_> = keybinds.custom_menus[0]
+            .items
+            .iter()
+            .map(|entry| menu_item(entry).1)
+            .collect();
+        assert_eq!(hotkeys, [Some('s'), Some('2'), Some('1'), Some('3')]);
+        assert!(config.collect_diagnostics().is_empty());
+    }
+
+    #[test]
+    fn invalid_menu_hotkey_is_ignored_with_diagnostic() {
+        let config: Config = toml::from_str(
+            r#"
+[[keys.menu]]
+key = "prefix+o"
+items = [
+  { label = "Stats", command = "btop", hotkey = "ab" },
+  { label = "Git", command = "lazygit", hotkey = "-" },
+]
+"#,
+        )
+        .unwrap();
+
+        let keybinds = config.keybinds();
+        let items = &keybinds.custom_menus[0].items;
+        assert_eq!(menu_item(&items[0]).1, Some('1'));
+        assert_eq!(menu_item(&items[1]).1, Some('2'));
+        let diagnostics = config.collect_diagnostics();
+        for field in ["items[0].hotkey", "items[1].hotkey"] {
+            assert!(diagnostics
+                .iter()
+                .any(|diag| diag.contains("invalid menu hotkey") && diag.contains(field)));
+        }
+    }
+
+    #[test]
+    fn navigation_keys_cannot_be_menu_hotkeys() {
+        let config: Config = toml::from_str(
+            r#"
+[[keys.menu]]
+key = "prefix+o"
+items = [
+  { label = "Stats", command = "btop", hotkey = "j" },
+  { label = "Git", command = "lazygit", hotkey = "K" },
+]
+"#,
+        )
+        .unwrap();
+
+        let keybinds = config.keybinds();
+        assert_eq!(menu_item(&keybinds.custom_menus[0].items[0]).1, Some('1'));
+        assert_eq!(menu_item(&keybinds.custom_menus[0].items[1]).1, Some('2'));
+        let diagnostics = config.collect_diagnostics();
+        assert_eq!(
+            diagnostics
+                .iter()
+                .filter(|diag| diag.contains("reserved menu hotkey"))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn duplicate_menu_hotkey_is_ignored_with_diagnostic() {
+        let config: Config = toml::from_str(
+            r#"
+[[keys.menu]]
+key = "prefix+o"
+items = [
+  { label = "Stats", command = "btop", hotkey = "s" },
+  { label = "Git", command = "lazygit", hotkey = "S" },
+]
+"#,
+        )
+        .unwrap();
+
+        let keybinds = config.keybinds();
+        let items = &keybinds.custom_menus[0].items;
+        assert_eq!(menu_item(&items[0]).1, Some('s'));
+        assert_eq!(menu_item(&items[1]).1, Some('1'));
+        assert!(config.collect_diagnostics().iter().any(|diag| {
+            diag.contains("duplicate menu hotkey") && diag.contains("items[1].hotkey")
+        }));
     }
 }

@@ -5,6 +5,7 @@ mod agents;
 mod env;
 mod integrations;
 mod layouts;
+mod menus;
 mod panes;
 pub(crate) mod plugins;
 pub(super) mod responses;
@@ -1188,6 +1189,9 @@ impl App {
             Method::PaneSendKeys(params) => return self.handle_pane_send_keys(request.id, params),
             Method::IntegrationList(_) => {
                 return self.handle_integration_list(request.id);
+            }
+            Method::MenuList(_) => {
+                return self.handle_menu_list(request.id);
             }
             Method::IntegrationInstall(params) => {
                 return self.handle_integration_install(request.id, params);

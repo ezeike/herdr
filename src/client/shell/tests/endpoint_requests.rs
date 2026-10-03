@@ -484,3 +484,105 @@ fn another_machine_disconnect_does_not_cancel_active_popup() {
     assert!(state.popup_pending);
     assert_eq!(state.pending_requests.len(), 1);
 }
+
+fn menu_state() -> ClientShellState {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface());
+    state
+}
+
+fn custom_menu_binding() -> crate::config::CustomMenuKeybind {
+    crate::config::CustomMenuKeybind {
+        bindings: crate::config::ActionKeybinds::prefix("o"),
+        title: "Tools".into(),
+        items: Vec::new(),
+    }
+}
+
+fn menu_list_result(binding_labels: Vec<String>) -> crate::api::schema::ResponseResult {
+    crate::api::schema::ResponseResult::MenuList {
+        menus: vec![crate::api::schema::MenuInfo {
+            menu_id: "menu_ns_0".into(),
+            binding_label: binding_labels.first().cloned().unwrap_or_default(),
+            binding_labels,
+            title: "Tools".into(),
+            items: vec![crate::api::schema::MenuItemInfo {
+                command_id: "menu_ns_0_0".into(),
+                label: "Stats".into(),
+                hotkey: Some("1".into()),
+                divider: false,
+            }],
+        }],
+    }
+}
+
+#[test]
+fn custom_menu_keybind_requests_the_menu_list_and_opens_the_popup_on_reply() {
+    let mut state = menu_state();
+    let boot_id = state.snapshot.as_ref().unwrap().boot_id.clone();
+    let binding = custom_menu_binding();
+    let labels = binding.bindings.labels();
+
+    let mut outcome = ClientShellInput::default();
+    state.record_binding(crate::input::KeybindMatch::Menu(binding), &mut outcome);
+
+    let [ClientShellAction::Endpoint { request, .. }] = &outcome.actions[..] else {
+        panic!("expected a menu.list request");
+    };
+    assert!(matches!(
+        request.method,
+        crate::api::schema::Method::MenuList(_)
+    ));
+    assert!(state.overlay.is_none());
+
+    state.handle_endpoint_result(&boot_id, &request.id, Ok(menu_list_result(labels)));
+
+    assert!(matches!(
+        &state.overlay,
+        Some(ClientShellOverlay::CustomMenu(menu))
+            if menu.menu.title == "Tools" && menu.highlighted == 0
+    ));
+}
+
+#[test]
+fn custom_menu_reply_without_a_matching_menu_reports_an_error() {
+    let mut state = menu_state();
+    let boot_id = state.snapshot.as_ref().unwrap().boot_id.clone();
+
+    let mut outcome = ClientShellInput::default();
+    state.record_binding(
+        crate::input::KeybindMatch::Menu(custom_menu_binding()),
+        &mut outcome,
+    );
+    let [ClientShellAction::Endpoint { request, .. }] = &outcome.actions[..] else {
+        panic!("expected a menu.list request");
+    };
+
+    state.handle_endpoint_result(
+        &boot_id,
+        &request.id,
+        Ok(menu_list_result(vec!["prefix+z".into()])),
+    );
+
+    assert!(state.overlay.is_none());
+}
+
+#[test]
+fn custom_menu_keybind_is_unavailable_when_the_endpoint_does_not_advertise_menu_list() {
+    let mut state = menu_state();
+    state.set_endpoint_methods(Some(Vec::new()));
+
+    let mut outcome = ClientShellInput::default();
+    state.record_binding(
+        crate::input::KeybindMatch::Menu(custom_menu_binding()),
+        &mut outcome,
+    );
+
+    assert!(outcome.actions.is_empty());
+    assert!(state.overlay.is_none());
+    assert!(state
+        .visible_endpoint_notice
+        .as_ref()
+        .is_some_and(|notice| notice.key.code == "menu.list"));
+}

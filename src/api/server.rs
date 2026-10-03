@@ -575,6 +575,7 @@ pub(crate) fn api_method_name(method: &Method) -> &'static str {
         Method::ProductAnnouncementDismiss(_) => "product_announcement.dismiss",
         Method::ReleaseNotesDismiss(_) => "release_notes.dismiss",
         Method::CommandInvoke(_) => "command.invoke",
+        Method::MenuList(_) => "menu.list",
         Method::ClientWindowTitleSet(_) => "client.window_title.set",
         Method::ClientWindowTitleClear(_) => "client.window_title.clear",
         Method::ClientShellSurfaceSet(_) => "client_shell.surface.set",

@@ -661,6 +661,13 @@ impl ClientShellState {
                 occlusion.cover(rendered.area);
                 self.hits.global_menu_rows = rendered.menu_rows;
                 None
+            } else if let ClientShellOverlay::CustomMenu(menu) = overlay {
+                let rendered =
+                    render::render_custom_menu(&mut composed, menu, &self.config.palette)?;
+                occlusion.cover(rendered.area);
+                self.hits.custom_menu_area = rendered.area;
+                self.hits.custom_menu_rows = rendered.menu_rows;
+                None
             } else {
                 let rendered = render::render_client_overlay(
                     &mut composed,

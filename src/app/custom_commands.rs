@@ -22,6 +22,7 @@ pub(super) fn new_command_namespace() -> String {
 #[derive(Debug)]
 pub(super) struct EndpointCommandRegistry {
     entries: Vec<EndpointCommand>,
+    menus: Vec<EndpointMenu>,
 }
 
 #[derive(Debug)]
@@ -29,21 +30,84 @@ struct EndpointCommand {
     id: String,
     binding: crate::config::CustomCommandKeybind,
     action: crate::protocol::ClientShellCommandAction,
+    /// Synthesized from a `[[keys.menu]]` item; kept out of the commands manifest.
+    in_menu: bool,
+}
+
+#[derive(Debug)]
+struct EndpointMenu {
+    id: String,
+    binding_labels: Vec<String>,
+    title: String,
+    items: Vec<EndpointMenuItem>,
+}
+
+#[derive(Debug)]
+enum EndpointMenuItem {
+    Command {
+        id: String,
+        label: String,
+        hotkey: Option<char>,
+    },
+    Divider,
 }
 
 impl EndpointCommandRegistry {
-    pub(super) fn new(bindings: &[crate::config::CustomCommandKeybind]) -> Self {
+    pub(super) fn new(
+        bindings: &[crate::config::CustomCommandKeybind],
+        menus: &[crate::config::CustomMenuKeybind],
+    ) -> Self {
         let namespace = new_command_namespace();
-        let entries = bindings
+        let mut entries: Vec<EndpointCommand> = bindings
             .iter()
             .enumerate()
             .map(|(index, binding)| EndpointCommand {
                 action: binding.action.into(),
                 id: format!("cmd_{namespace}_{index}"),
                 binding: binding.clone(),
+                in_menu: false,
             })
             .collect();
-        Self { entries }
+
+        let endpoint_menus = menus
+            .iter()
+            .enumerate()
+            .map(|(menu_index, menu)| {
+                let mut items = Vec::new();
+                for (item_index, item) in menu.items.iter().enumerate() {
+                    match item {
+                        crate::config::CustomMenuEntry::Item { binding, hotkey } => {
+                            let id = format!("menu_{namespace}_{menu_index}_{item_index}");
+                            items.push(EndpointMenuItem::Command {
+                                id: id.clone(),
+                                label: binding.label.clone(),
+                                hotkey: *hotkey,
+                            });
+                            entries.push(EndpointCommand {
+                                action: binding.action.into(),
+                                id,
+                                binding: binding.clone(),
+                                in_menu: true,
+                            });
+                        }
+                        crate::config::CustomMenuEntry::Divider => {
+                            items.push(EndpointMenuItem::Divider);
+                        }
+                    }
+                }
+                EndpointMenu {
+                    id: format!("menu_{namespace}_{menu_index}"),
+                    binding_labels: menu.bindings.labels(),
+                    title: menu.title.clone(),
+                    items,
+                }
+            })
+            .collect();
+
+        Self {
+            entries,
+            menus: endpoint_menus,
+        }
     }
 }
 
@@ -56,12 +120,46 @@ impl App {
         self.endpoint_commands
             .entries
             .iter()
+            .filter(|entry| !entry.in_menu)
             .map(|entry| crate::protocol::ClientShellCommand {
                 command_id: entry.id.clone(),
                 binding_label: entry.binding.label.clone(),
                 binding_labels: entry.binding.bindings.labels(),
                 action: entry.action,
                 description: entry.binding.description.clone(),
+            })
+            .collect()
+    }
+
+    pub(crate) fn menu_list(&self) -> Vec<crate::api::schema::MenuInfo> {
+        self.endpoint_commands
+            .menus
+            .iter()
+            .map(|menu| crate::api::schema::MenuInfo {
+                menu_id: menu.id.clone(),
+                binding_label: menu.binding_labels.first().cloned().unwrap_or_default(),
+                binding_labels: menu.binding_labels.clone(),
+                title: menu.title.clone(),
+                items: menu
+                    .items
+                    .iter()
+                    .map(|item| match item {
+                        EndpointMenuItem::Command { id, label, hotkey } => {
+                            crate::api::schema::MenuItemInfo {
+                                command_id: id.clone(),
+                                label: label.clone(),
+                                hotkey: hotkey.map(String::from),
+                                divider: false,
+                            }
+                        }
+                        EndpointMenuItem::Divider => crate::api::schema::MenuItemInfo {
+                            command_id: String::new(),
+                            label: String::new(),
+                            hotkey: None,
+                            divider: true,
+                        },
+                    })
+                    .collect(),
             })
             .collect()
     }
@@ -594,7 +692,172 @@ mod tests {
     }
 
     fn install(app: &mut crate::app::App, binding: crate::config::CustomCommandKeybind) {
-        app.endpoint_commands = super::EndpointCommandRegistry::new(&[binding]);
+        app.endpoint_commands = super::EndpointCommandRegistry::new(&[binding], &[]);
+    }
+
+    fn menu(items: Vec<crate::config::CustomCommandKeybind>) -> crate::config::CustomMenuKeybind {
+        crate::config::CustomMenuKeybind {
+            bindings: crate::config::ActionKeybinds::prefix("o"),
+            title: "claude tools".into(),
+            items: items
+                .into_iter()
+                .enumerate()
+                .map(|(index, binding)| crate::config::CustomMenuEntry::Item {
+                    binding,
+                    hotkey: char::from_digit(index as u32 + 1, 10),
+                })
+                .collect(),
+        }
+    }
+
+    fn install_menu(app: &mut crate::app::App, menu: crate::config::CustomMenuKeybind) {
+        app.endpoint_commands = super::EndpointCommandRegistry::new(&[], &[menu]);
+    }
+
+    #[test]
+    fn menu_items_get_command_ids_and_stay_out_of_the_command_manifest() {
+        let mut app = test_app();
+        install_menu(
+            &mut app,
+            menu(vec![binding(crate::config::CustomCommandAction::Shell)]),
+        );
+
+        let menus = app.menu_list();
+
+        assert!(app.client_shell_command_manifest().is_empty());
+        assert_eq!(menus.len(), 1);
+        assert_eq!(menus[0].title, "claude tools");
+        assert_eq!(menus[0].binding_labels, ["prefix+o"]);
+        assert_eq!(menus[0].items.len(), 1);
+        assert_eq!(menus[0].items[0].hotkey.as_deref(), Some("1"));
+        assert!(!menus[0].items[0].divider);
+        assert!(app
+            .resolve_client_shell_command(&menus[0].items[0].command_id)
+            .is_some());
+    }
+
+    #[test]
+    fn menu_dividers_are_listed_without_command_ids() {
+        let mut app = test_app();
+        let item = binding(crate::config::CustomCommandAction::Shell);
+        let mut menu = menu(Vec::new());
+        menu.items = vec![
+            crate::config::CustomMenuEntry::Item {
+                binding: item.clone(),
+                hotkey: Some('a'),
+            },
+            crate::config::CustomMenuEntry::Divider,
+            crate::config::CustomMenuEntry::Item {
+                binding: item,
+                hotkey: None,
+            },
+        ];
+        install_menu(&mut app, menu);
+
+        let items = &app.menu_list()[0].items;
+
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0].hotkey.as_deref(), Some("a"));
+        assert!(items[1].divider);
+        assert!(items[1].command_id.is_empty());
+        assert!(!items[2].divider);
+        assert!(app
+            .resolve_client_shell_command(&items[1].command_id)
+            .is_none());
+        assert_ne!(items[0].command_id, items[2].command_id);
+    }
+
+    #[test]
+    fn menu_list_response_exposes_opaque_ids_without_command_text() {
+        let mut app = test_app();
+        install_menu(
+            &mut app,
+            menu(vec![binding(crate::config::CustomCommandAction::Shell)]),
+        );
+
+        let response =
+            app.handle_api_request(crate::api::schema::Request {
+                id: "request-1".into(),
+                method: crate::api::schema::Method::MenuList(
+                    crate::api::schema::EmptyParams::default(),
+                ),
+            });
+
+        assert!(!response.contains("secret-command"));
+        let success: crate::api::schema::SuccessResponse = serde_json::from_str(&response).unwrap();
+        let crate::api::schema::ResponseResult::MenuList { menus } = success.result else {
+            panic!("expected menu list result");
+        };
+        assert_eq!(menus[0].items[0].label, "prefix+z");
+        assert_eq!(
+            app.resolve_client_shell_command(&menus[0].items[0].command_id)
+                .map(|binding| binding.command),
+            Some("secret-command --token hidden".into())
+        );
+    }
+
+    #[test]
+    fn stale_menu_item_id_is_rejected_after_definition_changes() {
+        let mut app = test_app();
+        install_menu(
+            &mut app,
+            menu(vec![binding(crate::config::CustomCommandAction::Shell)]),
+        );
+        let old_id = app.menu_list()[0].items[0].command_id.clone();
+        let mut replacement = binding(crate::config::CustomCommandAction::Shell);
+        replacement.command = "replacement-command".into();
+        install_menu(&mut app, menu(vec![replacement]));
+
+        let response = app.handle_command_invoke(
+            "request-1".into(),
+            crate::api::schema::CommandInvokeParams {
+                command_id: old_id,
+                workspace_id: None,
+                tab_id: None,
+                pane_id: None,
+                selection: None,
+            },
+        );
+        let error: crate::api::schema::ErrorResponse = serde_json::from_str(&response).unwrap();
+        assert_eq!(error.error.code, "command_not_found");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn menu_item_invocation_executes_endpoint_owned_definition() {
+        let mut app = test_app();
+        let path = std::path::PathBuf::from(format!(
+            "/var/tmp/herdr-menu-invoke-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let mut item = binding(crate::config::CustomCommandAction::Shell);
+        item.command = format!("printf invoked > {}", path.display());
+        install_menu(&mut app, menu(vec![item]));
+        let command_id = app.menu_list()[0].items[0].command_id.clone();
+
+        let response = app.handle_command_invoke(
+            "request-1".into(),
+            crate::api::schema::CommandInvokeParams {
+                command_id,
+                workspace_id: None,
+                tab_id: None,
+                pane_id: None,
+                selection: None,
+            },
+        );
+        let success: crate::api::schema::SuccessResponse = serde_json::from_str(&response).unwrap();
+        assert_eq!(success.result, crate::api::schema::ResponseResult::Ok {});
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while !path.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "invoked");
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
