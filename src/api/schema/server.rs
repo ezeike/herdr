@@ -11,6 +11,9 @@ pub struct ServerLiveHandoffParams {
     pub expected_protocol: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expected_version: Option<String>,
+    /// Environment for the replacement server, used instead of the old server's own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env: Option<std::collections::BTreeMap<String, String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

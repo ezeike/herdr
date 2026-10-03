@@ -3858,6 +3858,16 @@
         },
         "ServerLiveHandoffParams": {
           "properties": {
+            "env": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "Environment for the replacement server, used instead of the old server's own.",
+              "type": [
+                "object",
+                "null"
+              ]
+            },
             "expected_protocol": {
               "format": "uint32",
               "minimum": 0,

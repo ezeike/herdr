@@ -116,6 +116,7 @@ impl HeadlessServer {
             import_exe.as_deref(),
             &socket_path,
             &token,
+            params.env.as_ref(),
         ) {
             Ok(child) => child,
             Err(err) => {

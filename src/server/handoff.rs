@@ -66,6 +66,7 @@ pub(crate) fn spawn_handoff_import(
     import_exe: Option<&Path>,
     socket_path: &Path,
     token: &str,
+    env: Option<&std::collections::BTreeMap<String, String>>,
 ) -> io::Result<Child> {
     let fallback_exe;
     let exe = if let Some(import_exe) = import_exe {
@@ -88,6 +89,10 @@ pub(crate) fn spawn_handoff_import(
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
+    // Use the caller's fresh environment instead of inheriting the old server's.
+    if let Some(env) = env {
+        command.env_clear().envs(env);
+    }
     if crate::session::explicit_session_requested() {
         // The import child no longer has the original `--session` argument, so
         // stale socket overrides must not mask the inherited HERDR_SESSION.

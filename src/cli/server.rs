@@ -200,7 +200,7 @@ fn print_agent_manifest_status(response: &serde_json::Value) {
 fn server_live_handoff(args: &[String]) -> std::io::Result<i32> {
     let Some(params) = parse_live_handoff_params(args) else {
         eprintln!(
-            "usage: herdr server live-handoff [--import-exe <path>] [--expected-protocol <n>] [--expected-version <version>]"
+            "usage: herdr server live-handoff [--import-exe <path>] [--expected-protocol <n>] [--expected-version <version>] [--no-env-refresh]"
         );
         return Ok(2);
     };
@@ -232,9 +232,17 @@ fn server_live_handoff(args: &[String]) -> std::io::Result<i32> {
 
 fn parse_live_handoff_params(args: &[String]) -> Option<ServerLiveHandoffParams> {
     let mut params = ServerLiveHandoffParams::default();
+    // Refresh the replacement server's env from this shell so a stale SSH_AUTH_SOCK
+    // isn't carried forward; --no-env-refresh keeps inheriting the old server's.
+    let mut refresh_env = true;
     let mut idx = 0;
     while idx < args.len() {
         let arg = &args[idx];
+        if arg == "--no-env-refresh" {
+            refresh_env = false;
+            idx += 1;
+            continue;
+        }
         let (flag, value) = if let Some((flag, value)) = arg.split_once('=') {
             (flag, Some(value.to_string()))
         } else {
@@ -253,6 +261,9 @@ fn parse_live_handoff_params(args: &[String]) -> Option<ServerLiveHandoffParams>
         }
         idx += 1;
     }
+    if refresh_env {
+        params.env = Some(std::env::vars().collect());
+    }
     Some(params)
 }
 
@@ -260,7 +271,9 @@ fn print_server_help() {
     eprintln!("herdr server commands:");
     eprintln!("  herdr server                run as headless server");
     eprintln!("  herdr server stop           stop the running server via the API socket");
-    eprintln!("  herdr server live-handoff   hand off live panes to a new local server");
+    eprintln!(
+        "  herdr server live-handoff   hand off live panes to a fresh local server (no update needed)"
+    );
     eprintln!("  herdr server reload-config  reload config.toml in the running server");
     eprintln!("  herdr server agent-manifests [--json]  show agent detection manifest status");
     eprintln!("  herdr server update-agent-manifests [--json]  fetch and reload agent detection manifests");
@@ -367,5 +380,41 @@ mod tests {
         );
         assert_eq!(params.expected_protocol, Some(9));
         assert_eq!(params.expected_version.as_deref(), Some("0.6.2"));
+    }
+
+    #[test]
+    fn live_handoff_params_default_to_refreshing_env_from_this_process() {
+        // SAFETY: test-only env var, no other test in this process reads it.
+        unsafe { std::env::set_var("HERDR_LIVE_HANDOFF_TEST_VAR", "fresh") };
+
+        let params = parse_live_handoff_params(&[]).expect("params");
+
+        let env = params.env.expect("env should default to Some");
+        assert_eq!(
+            env.get("HERDR_LIVE_HANDOFF_TEST_VAR").map(String::as_str),
+            Some("fresh")
+        );
+
+        unsafe { std::env::remove_var("HERDR_LIVE_HANDOFF_TEST_VAR") };
+    }
+
+    #[test]
+    fn no_env_refresh_flag_leaves_env_unset() {
+        let params = parse_live_handoff_params(&["--no-env-refresh".to_string()]).expect("params");
+
+        assert!(params.env.is_none());
+    }
+
+    #[test]
+    fn no_env_refresh_flag_combines_with_other_flags() {
+        let args = vec![
+            "--no-env-refresh".to_string(),
+            "--expected-protocol=9".to_string(),
+        ];
+
+        let params = parse_live_handoff_params(&args).expect("params");
+
+        assert!(params.env.is_none());
+        assert_eq!(params.expected_protocol, Some(9));
     }
 }
